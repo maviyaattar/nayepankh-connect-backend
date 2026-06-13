@@ -151,6 +151,307 @@ app.get("/", (req, res) => {
 });
 
 
+
+/* =========================
+   USER SCHEMA
+========================= */
+
+const userSchema = new mongoose.Schema({
+  name: {
+    type: String,
+    required: true,
+    trim: true
+  },
+
+  email: {
+    type: String,
+    required: true,
+    unique: true,
+    lowercase: true
+  },
+
+  password: {
+    type: String,
+    default: ""
+  },
+
+  googleId: {
+    type: String,
+    default: ""
+  },
+
+  avatar: {
+    type: String,
+    default: ""
+  },
+
+  role: {
+    type: String,
+    enum: ["volunteer", "admin"],
+    default: "volunteer"
+  },
+
+  status: {
+    type: String,
+    enum: ["active", "banned"],
+    default: "active"
+  },
+
+  phone: {
+    type: String,
+    default: ""
+  },
+
+  college: {
+    type: String,
+    default: ""
+  },
+
+  skills: {
+    type: [String],
+    default: []
+  },
+
+  interests: {
+    type: [String],
+    default: []
+  },
+
+  city: {
+    type: String,
+    default: ""
+  },
+
+  bio: {
+    type: String,
+    default: ""
+  }
+
+}, {
+  timestamps: true
+});
+
+
+const User = mongoose.model("User", userSchema);
+
+
+
+/* =========================
+   CAMPAIGN SCHEMA
+========================= */
+
+const campaignSchema = new mongoose.Schema({
+
+  title: {
+    type: String,
+    required: true
+  },
+
+  description: {
+    type: String,
+    required: true
+  },
+
+  category: {
+    type: String,
+    enum: [
+      "Education",
+      "Environment",
+      "Health",
+      "Social Awareness",
+      "Skill Development",
+      "Other"
+    ],
+    default: "Other"
+  },
+
+  image: {
+    type: String,
+    default: ""
+  },
+
+  location: {
+    type: String,
+    required: true
+  },
+
+  eventDate: {
+    type: Date,
+    required: true
+  },
+
+  lastApplyDate: {
+    type: Date,
+    required: true
+  },
+
+  requiredVolunteers: {
+    type: Number,
+    required: true
+  },
+
+  currentVolunteers: {
+    type: Number,
+    default: 0
+  },
+
+  status: {
+    type: String,
+    enum: [
+      "upcoming",
+      "ongoing",
+      "completed",
+      "cancelled"
+    ],
+    default: "upcoming"
+  },
+
+  createdBy: {
+    type: mongoose.Schema.Types.ObjectId,
+    ref: "User",
+    required: true
+  }
+
+}, {
+  timestamps: true
+});
+
+
+const Campaign = mongoose.model(
+  "Campaign",
+  campaignSchema
+);
+
+
+
+/* =========================
+   APPLICATION SCHEMA
+========================= */
+
+const applicationSchema = new mongoose.Schema({
+
+  volunteerId: {
+    type: mongoose.Schema.Types.ObjectId,
+    ref: "User",
+    required: true
+  },
+
+  campaignId: {
+    type: mongoose.Schema.Types.ObjectId,
+    ref: "Campaign",
+    required: true
+  },
+
+  message: {
+    type: String,
+    default: ""
+  },
+
+  status: {
+    type: String,
+    enum: [
+      "pending",
+      "approved",
+      "rejected"
+    ],
+    default: "pending"
+  }
+
+}, {
+  timestamps: true
+});
+
+
+const Application = mongoose.model(
+  "Application",
+  applicationSchema
+);
+
+
+
+/* =========================
+   CERTIFICATE SCHEMA
+========================= */
+
+const certificateSchema = new mongoose.Schema({
+
+  volunteerId: {
+    type: mongoose.Schema.Types.ObjectId,
+    ref: "User",
+    required: true
+  },
+
+  campaignId: {
+    type: mongoose.Schema.Types.ObjectId,
+    ref: "Campaign",
+    required: true
+  },
+
+  certificateUrl: {
+    type: String,
+    required: true
+  },
+
+  issuedBy: {
+    type: mongoose.Schema.Types.ObjectId,
+    ref: "User",
+    required: true
+  },
+
+  issuedDate: {
+    type: Date,
+    default: Date.now
+  }
+
+}, {
+  timestamps: true
+});
+
+
+const Certificate = mongoose.model(
+  "Certificate",
+  certificateSchema
+);
+
+
+
+/* =========================
+   CONTACT SCHEMA
+========================= */
+
+const contactSchema = new mongoose.Schema({
+
+  name: {
+    type: String,
+    required: true
+  },
+
+  email: {
+    type: String,
+    required: true
+  },
+
+  subject: {
+    type: String,
+    required: true
+  },
+
+  message: {
+    type: String,
+    required: true
+  }
+
+}, {
+  timestamps: true
+});
+
+
+const Contact = mongoose.model(
+  "Contact",
+  contactSchema
+);
+
+
 // =========================
 // START SERVER
 // =========================
