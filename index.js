@@ -132,23 +132,7 @@ function generateToken(id) {
 }
 
 
-// =========================
-// HOME / HEALTH CHECK
-// =========================
 
-app.get("/", (req, res) => {
-
-  res.json({
-
-    success: true,
-
-    project: "NayePankh Connect",
-
-    message: "🚀 Backend Running Successfully"
-
-  });
-
-});
 
 
 
@@ -451,6 +435,410 @@ const Contact = mongoose.model(
   contactSchema
 );
 
+
+/* =========================
+   AUTH MIDDLEWARE
+========================= */
+
+const protect = async (req, res, next) => {
+
+  try {
+
+    const authHeader = req.headers.authorization;
+
+    if (!authHeader) {
+      return res.status(401).json({
+        success: false,
+        message: "No token provided"
+      });
+    }
+
+    const token = authHeader.split(" ")[1];
+
+    const decoded = jwt.verify(
+      token,
+      process.env.JWT_SECRET
+    );
+
+    const user = await User
+      .findById(decoded.id)
+      .select("-password");
+
+
+    if (!user || user.status === "banned") {
+
+      return res.status(403).json({
+        success: false,
+        message: "Account not active"
+      });
+
+    }
+
+
+    req.user = user;
+
+    next();
+
+  } catch (error) {
+
+    res.status(401).json({
+      success: false,
+      message: "Invalid token"
+    });
+
+  }
+
+};
+
+
+
+const adminOnly = (req, res, next) => {
+
+  if (req.user.role !== "admin") {
+
+    return res.status(403).json({
+      success: false,
+      message: "Admin access only"
+    });
+
+  }
+
+  next();
+
+};
+
+
+/* =========================
+   GOOGLE VOLUNTEER LOGIN
+========================= */
+
+
+app.post("/api/auth/google", async (req, res) => {
+
+  try {
+
+    const { token } = req.body;
+
+
+    const ticket =
+      await googleClient.verifyIdToken({
+
+        idToken: token,
+
+        audience: process.env.GOOGLE_CLIENT_ID
+
+      });
+
+
+    const payload = ticket.getPayload();
+
+
+    let user =
+      await User.findOne({
+        email: payload.email
+      });
+
+
+    if (!user) {
+
+      user = await User.create({
+
+        name: payload.name,
+
+        email: payload.email,
+
+        googleId: payload.sub,
+
+        avatar: payload.picture,
+
+        role: "volunteer"
+
+      });
+
+    }
+
+
+    const jwtToken =
+      generateToken(user._id);
+
+
+    res.json({
+
+      success: true,
+
+      token: jwtToken,
+
+      user: {
+
+        id: user._id,
+
+        name: user.name,
+
+        email: user.email,
+
+        role: user.role,
+
+        avatar: user.avatar
+
+      }
+
+    });
+
+
+  } catch (error) {
+
+    console.log(error);
+
+    res.status(500).json({
+
+      success: false,
+
+      message: "Google login failed"
+
+    });
+
+  }
+
+});
+
+
+
+/* =========================
+   ADMIN LOGIN
+========================= */
+
+
+app.post("/api/admin/login", async (req, res) => {
+
+  try {
+
+    const { email, password } = req.body;
+
+
+    const admin = await User.findOne({
+      email,
+      role: "admin"
+    });
+
+
+    if (!admin) {
+
+      return res.status(400).json({
+
+        success: false,
+
+        message: "Invalid credentials"
+
+      });
+
+    }
+
+
+    const match =
+      await bcrypt.compare(
+        password,
+        admin.password
+      );
+
+
+    if (!match) {
+
+      return res.status(400).json({
+
+        success: false,
+
+        message: "Invalid credentials"
+
+      });
+
+    }
+
+
+    res.json({
+
+      success: true,
+
+      token: generateToken(admin._id),
+
+      user: {
+
+        id: admin._id,
+
+        name: admin.name,
+
+        email: admin.email,
+
+        role: admin.role
+
+      }
+
+    });
+
+
+  } catch (error) {
+
+    res.status(500).json({
+
+      success: false,
+
+      message: error.message
+
+    });
+
+  }
+
+});
+
+
+
+/* =========================
+   GET CURRENT USER
+========================= */
+
+
+app.get(
+  "/api/auth/profile",
+  protect,
+  async (req, res) => {
+
+    res.json({
+
+      success: true,
+
+      user: req.user
+
+    });
+
+  }
+
+);
+
+
+
+/* =========================
+   CREATE NEW ADMIN
+========================= */
+
+
+app.post(
+  "/api/admin/create",
+  protect,
+  adminOnly,
+  async (req, res) => {
+
+
+    try {
+
+
+      const {
+        name,
+        email,
+        password
+      } = req.body;
+
+
+      const exists =
+        await User.findOne({
+          email
+        });
+
+
+      if (exists) {
+
+        return res.status(400).json({
+
+          success: false,
+
+          message: "Email already exists"
+
+        });
+
+      }
+
+
+      const hashedPassword =
+        await bcrypt.hash(
+          password,
+          12
+        );
+
+
+      const admin =
+        await User.create({
+
+          name,
+
+          email,
+
+          password: hashedPassword,
+
+          role: "admin"
+
+        });
+
+
+
+      res.status(201).json({
+
+        success: true,
+
+        message:
+          "Admin created successfully",
+
+        admin: {
+
+          id: admin._id,
+
+          name: admin.name,
+
+          email: admin.email
+
+        }
+
+      });
+
+
+    } catch (error) {
+
+
+      res.status(500).json({
+
+        success: false,
+
+        message: error.message
+
+      });
+
+
+    }
+
+
+  }
+
+);
+
+
+
+
+
+
+// =========================
+// HOME / HEALTH CHECK
+// =========================
+
+app.get("/", (req, res) => {
+
+  res.json({
+
+    success: true,
+
+    project: "NayePankh Connect",
+
+    message: "🚀 Backend Running Successfully"
+
+  });
+
+});
 
 // =========================
 // START SERVER
