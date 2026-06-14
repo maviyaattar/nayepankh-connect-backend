@@ -14,6 +14,10 @@ const cors = require("cors");
 const axios = require("axios");
 const bcrypt = require("bcryptjs");
 const jwt = require("jsonwebtoken");
+const PDFDocument = require("pdfkit");
+const QRCode = require("qrcode");
+const streamifier = require("streamifier");
+const crypto = require("crypto");
 
 const helmet = require("helmet");
 const rateLimit = require("express-rate-limit");
@@ -359,11 +363,19 @@ const Application = mongoose.model(
 
 const certificateSchema = new mongoose.Schema({
 
+  certificateId: {
+    type: String,
+    unique: true,
+    required: true
+  },
+
+
   volunteerId: {
     type: mongoose.Schema.Types.ObjectId,
     ref: "User",
     required: true
   },
+
 
   campaignId: {
     type: mongoose.Schema.Types.ObjectId,
@@ -371,16 +383,39 @@ const certificateSchema = new mongoose.Schema({
     required: true
   },
 
-  certificateUrl: {
+
+  pdfUrl: {
     type: String,
     required: true
   },
+
+
+  qrCode: {
+    type: String,
+    default: ""
+  },
+
+
+  status: {
+
+    type: String,
+
+    enum: [
+      "active",
+      "revoked"
+    ],
+
+    default: "active"
+
+  },
+
 
   issuedBy: {
     type: mongoose.Schema.Types.ObjectId,
     ref: "User",
     required: true
   },
+
 
   issuedDate: {
     type: Date,
@@ -392,13 +427,11 @@ const certificateSchema = new mongoose.Schema({
 });
 
 
-const Certificate = mongoose.model(
+const Certificate =
+mongoose.model(
   "Certificate",
   certificateSchema
 );
-
-
-
 /* =========================
    CONTACT SCHEMA
 ========================= */
@@ -1187,6 +1220,2088 @@ app.delete(
 );
 
 
+/* =========================
+   APPLY FOR CAMPAIGN
+========================= */
+
+app.post(
+  "/api/applications/:campaignId",
+  protect,
+  async (req, res) => {
+
+    try {
+
+      // Only volunteers can apply
+      if (req.user.role !== "volunteer") {
+        return res.status(403).json({
+          success: false,
+          message: "Only volunteers can apply"
+        });
+      }
+
+
+      const campaign = await Campaign.findById(
+        req.params.campaignId
+      );
+
+
+      if (!campaign) {
+        return res.status(404).json({
+          success: false,
+          message: "Campaign not found"
+        });
+      }
+
+
+      // Check deadline
+      if (new Date() > campaign.lastApplyDate) {
+
+        return res.status(400).json({
+          success: false,
+          message: "Application deadline ended"
+        });
+
+      }
+
+
+      // Check seats
+      if (
+        campaign.currentVolunteers >=
+        campaign.requiredVolunteers
+      ) {
+
+        return res.status(400).json({
+          success: false,
+          message: "No seats available"
+        });
+
+      }
+
+
+      // Duplicate check
+      const alreadyApplied =
+        await Application.findOne({
+          volunteerId: req.user._id,
+          campaignId: campaign._id
+        });
+
+
+      if (alreadyApplied) {
+
+        return res.status(400).json({
+          success: false,
+          message: "You already applied"
+        });
+
+      }
+
+
+      const application =
+        await Application.create({
+
+          volunteerId: req.user._id,
+
+          campaignId: campaign._id,
+
+          message: req.body.message || ""
+
+        });
+
+
+      res.status(201).json({
+
+        success: true,
+
+        message: "Application submitted",
+
+        application
+
+      });
+
+
+    } catch(error) {
+
+      res.status(500).json({
+        success: false,
+        message: error.message
+      });
+
+    }
+
+  }
+);
+
+
+
+/* =========================
+   MY APPLICATIONS
+========================= */
+
+
+app.get(
+  "/api/my-applications",
+  protect,
+  async(req,res)=>{
+
+
+    try{
+
+
+      const applications =
+      await Application.find({
+
+        volunteerId:req.user._id
+
+      })
+      .populate(
+        "campaignId",
+        "title image location eventDate status"
+      )
+      .sort({
+        createdAt:-1
+      });
+
+
+      res.json({
+
+        success:true,
+
+        count:applications.length,
+
+        applications
+
+      });
+
+
+    }catch(error){
+
+      res.status(500).json({
+
+        success:false,
+
+        message:error.message
+
+      });
+
+    }
+
+  }
+);
+
+
+
+/* =========================
+   CANCEL APPLICATION
+========================= */
+
+
+app.delete(
+  "/api/applications/:id",
+  protect,
+  async(req,res)=>{
+
+
+    try{
+
+
+      const application =
+      await Application.findById(
+        req.params.id
+      );
+
+
+      if(!application){
+
+        return res.status(404).json({
+          success:false,
+          message:"Application not found"
+        });
+
+      }
+
+
+      if(
+        application.volunteerId.toString()
+        !==
+        req.user._id.toString()
+      ){
+
+        return res.status(403).json({
+          success:false,
+          message:"Unauthorized"
+        });
+
+      }
+
+
+      if(
+        application.status === "approved"
+      ){
+
+        return res.status(400).json({
+          success:false,
+          message:"Approved application cannot be cancelled"
+        });
+
+      }
+
+
+      await application.deleteOne();
+
+
+      res.json({
+
+        success:true,
+
+        message:"Application cancelled"
+
+      });
+
+
+    }catch(error){
+
+      res.status(500).json({
+
+        success:false,
+
+        message:error.message
+
+      });
+
+    }
+
+
+  }
+);
+
+
+
+/* =========================
+   ADMIN GET ALL APPLICATIONS
+========================= */
+
+
+app.get(
+  "/api/admin/applications",
+  protect,
+  adminOnly,
+  async(req,res)=>{
+
+
+    try{
+
+
+      const applications =
+      await Application.find()
+
+      .populate(
+        "volunteerId",
+        "name email phone college"
+      )
+
+      .populate(
+        "campaignId",
+        "title category location"
+      )
+
+      .sort({
+        createdAt:-1
+      });
+
+
+
+      res.json({
+
+        success:true,
+
+        count:applications.length,
+
+        applications
+
+      });
+
+
+    }catch(error){
+
+
+      res.status(500).json({
+
+        success:false,
+
+        message:error.message
+
+      });
+
+    }
+
+
+  }
+);
+
+
+
+/* =========================
+   APPROVE / REJECT APPLICATION
+========================= */
+
+
+app.put(
+  "/api/admin/applications/:id",
+  protect,
+  adminOnly,
+  async(req,res)=>{
+
+
+    try{
+
+
+      const { status } = req.body;
+
+
+      if(
+        !["approved","rejected"]
+        .includes(status)
+      ){
+
+        return res.status(400).json({
+
+          success:false,
+
+          message:"Invalid status"
+
+        });
+
+      }
+
+
+      const application =
+      await Application.findById(
+        req.params.id
+      );
+
+
+      if(!application){
+
+        return res.status(404).json({
+
+          success:false,
+
+          message:"Application not found"
+
+        });
+
+      }
+
+
+      const campaign =
+      await Campaign.findById(
+        application.campaignId
+      );
+
+
+      if(
+        status === "approved"
+        &&
+        campaign.currentVolunteers >=
+        campaign.requiredVolunteers
+      ){
+
+        return res.status(400).json({
+
+          success:false,
+
+          message:"Campaign is full"
+
+        });
+
+      }
+
+
+      // Increase count only first time approval
+      if(
+        application.status !== "approved"
+        &&
+        status === "approved"
+      ){
+
+        campaign.currentVolunteers++;
+
+        await campaign.save();
+
+      }
+
+
+      application.status = status;
+
+      await application.save();
+
+
+      res.json({
+
+        success:true,
+
+        message:
+        `Application ${status}`,
+
+        application
+
+      });
+
+
+    }catch(error){
+
+      res.status(500).json({
+
+        success:false,
+
+        message:error.message
+
+      });
+
+    }
+
+
+  }
+);
+
+
+/* =========================
+   UPDATE VOLUNTEER PROFILE
+========================= */
+
+app.put(
+  "/api/profile",
+  protect,
+  async (req,res)=>{
+
+    try{
+
+      const updatedUser =
+      await User.findByIdAndUpdate(
+
+        req.user._id,
+
+        {
+          name:req.body.name,
+          phone:req.body.phone,
+          college:req.body.college,
+          city:req.body.city,
+          bio:req.body.bio,
+          skills:req.body.skills,
+          interests:req.body.interests
+        },
+
+        {
+          new:true
+        }
+
+      ).select("-password");
+
+
+      res.json({
+        success:true,
+        user:updatedUser
+      });
+
+
+    }catch(error){
+
+      res.status(500).json({
+        success:false,
+        message:error.message
+      });
+
+    }
+
+  }
+);
+
+
+
+/* =========================
+   UPLOAD PROFILE AVATAR
+========================= */
+
+app.post(
+  "/api/profile/avatar",
+  protect,
+  upload.single("image"),
+  async(req,res)=>{
+
+    try{
+
+      if(!req.file){
+
+        return res.status(400).json({
+          success:false,
+          message:"No image selected"
+        });
+
+      }
+
+
+      const base64 =
+      `data:${req.file.mimetype};base64,${req.file.buffer.toString("base64")}`;
+
+
+      const result =
+      await cloudinary.uploader.upload(
+        base64,
+        {
+          folder:"nayepankh-users"
+        }
+      );
+
+
+      const user =
+      await User.findByIdAndUpdate(
+
+        req.user._id,
+
+        {
+          avatar:result.secure_url
+        },
+
+        {
+          new:true
+        }
+
+      ).select("-password");
+
+
+      res.json({
+
+        success:true,
+
+        avatar:user.avatar
+
+      });
+
+
+    }catch(error){
+
+      res.status(500).json({
+
+        success:false,
+
+        message:error.message
+
+      });
+
+    }
+
+  }
+);
+
+
+
+/* =========================
+   GET ALL VOLUNTEERS
+========================= */
+
+app.get(
+  "/api/admin/users",
+  protect,
+  adminOnly,
+  async(req,res)=>{
+
+    try{
+
+
+      const users =
+      await User.find({
+
+        role:"volunteer"
+
+      })
+      .select("-password")
+      .sort({
+        createdAt:-1
+      });
+
+
+      res.json({
+
+        success:true,
+
+        count:users.length,
+
+        users
+
+      });
+
+
+    }catch(error){
+
+      res.status(500).json({
+
+        success:false,
+
+        message:error.message
+
+      });
+
+    }
+
+  }
+);
+
+
+
+/* =========================
+   BAN / UNBAN VOLUNTEER
+========================= */
+
+
+app.put(
+  "/api/admin/users/:id/status",
+  protect,
+  adminOnly,
+  async(req,res)=>{
+
+    try{
+
+
+      const user =
+      await User.findById(
+        req.params.id
+      );
+
+
+      if(
+        !user ||
+        user.role !== "volunteer"
+      ){
+
+        return res.status(404).json({
+
+          success:false,
+          message:"Volunteer not found"
+
+        });
+
+      }
+
+
+      user.status =
+      user.status === "active"
+      ?
+      "banned"
+      :
+      "active";
+
+
+      await user.save();
+
+
+      res.json({
+
+        success:true,
+
+        message:
+        `User ${user.status}`,
+
+        user
+
+      });
+
+
+    }catch(error){
+
+
+      res.status(500).json({
+
+        success:false,
+        message:error.message
+
+      });
+
+    }
+
+
+  }
+);
+
+
+
+/* =========================
+   DELETE VOLUNTEER
+========================= */
+
+
+app.delete(
+  "/api/admin/users/:id",
+  protect,
+  adminOnly,
+  async(req,res)=>{
+
+
+    try{
+
+
+      const user =
+      await User.findById(
+        req.params.id
+      );
+
+
+      if(
+        !user ||
+        user.role !== "volunteer"
+      ){
+
+        return res.status(404).json({
+
+          success:false,
+          message:"Volunteer not found"
+
+        });
+
+      }
+
+
+      await Application.deleteMany({
+        volunteerId:user._id
+      });
+
+
+      await Certificate.deleteMany({
+        volunteerId:user._id
+      });
+
+
+      await User.findByIdAndDelete(
+        user._id
+      );
+
+
+      res.json({
+
+        success:true,
+
+        message:"Volunteer deleted"
+
+      });
+
+
+    }catch(error){
+
+      res.status(500).json({
+
+        success:false,
+        message:error.message
+
+      });
+
+    }
+
+  }
+);
+
+
+
+/* =========================
+   CONTACT FORM
+========================= */
+
+
+app.post(
+  "/api/contact",
+  async(req,res)=>{
+
+
+    try{
+
+
+      const contact =
+      await Contact.create({
+
+        name:req.body.name,
+
+        email:req.body.email,
+
+        subject:req.body.subject,
+
+        message:req.body.message
+
+      });
+
+
+      res.status(201).json({
+
+        success:true,
+
+        message:"Message sent",
+
+        contact
+
+      });
+
+
+    }catch(error){
+
+
+      res.status(500).json({
+
+        success:false,
+        message:error.message
+
+      });
+
+    }
+
+
+  }
+);
+
+
+
+/* =========================
+   ADMIN GET CONTACTS
+========================= */
+
+
+app.get(
+  "/api/admin/contacts",
+  protect,
+  adminOnly,
+  async(req,res)=>{
+
+
+    try{
+
+
+      const contacts =
+      await Contact.find()
+      .sort({
+        createdAt:-1
+      });
+
+
+      res.json({
+
+        success:true,
+
+        count:contacts.length,
+
+        contacts
+
+      });
+
+
+    }catch(error){
+
+
+      res.status(500).json({
+
+        success:false,
+        message:error.message
+
+      });
+
+    }
+
+
+  }
+);
+
+
+
+/* =========================
+   DELETE CONTACT
+========================= */
+
+
+app.delete(
+  "/api/admin/contacts/:id",
+  protect,
+  adminOnly,
+  async(req,res)=>{
+
+
+    try{
+
+
+      await Contact.findByIdAndDelete(
+        req.params.id
+      );
+
+
+      res.json({
+
+        success:true,
+
+        message:"Contact deleted"
+
+      });
+
+
+    }catch(error){
+
+      res.status(500).json({
+
+        success:false,
+        message:error.message
+
+      });
+
+    }
+
+  }
+);
+
+
+
+/* =========================
+   SEARCH + FILTER CAMPAIGNS
+========================= */
+
+
+app.get(
+  "/api/search/campaigns",
+  async(req,res)=>{
+
+
+    try{
+
+
+      const page =
+      Number(req.query.page) || 1;
+
+
+      const limit = 6;
+
+
+      const query = {};
+
+
+      if(req.query.keyword){
+
+        query.title = {
+          $regex:req.query.keyword,
+          $options:"i"
+        };
+
+      }
+
+
+      if(req.query.category){
+
+        query.category =
+        req.query.category;
+
+      }
+
+
+      if(req.query.location){
+
+        query.location = {
+          $regex:req.query.location,
+          $options:"i"
+        };
+
+      }
+
+
+      const campaigns =
+      await Campaign.find(query)
+
+      .sort({
+        createdAt:-1
+      })
+
+      .skip(
+        (page-1)*limit
+      )
+
+      .limit(limit);
+
+
+      const total =
+      await Campaign.countDocuments(query);
+
+
+      res.json({
+
+        success:true,
+
+        page,
+
+        totalPages:
+        Math.ceil(total/limit),
+
+        count:campaigns.length,
+
+        campaigns
+
+      });
+
+
+    }catch(error){
+
+
+      res.status(500).json({
+
+        success:false,
+
+        message:error.message
+
+      });
+
+    }
+
+
+  }
+);
+
+
+
+/* =========================
+   AI CHAT HELPER
+========================= */
+
+async function askAI(systemPrompt, message) {
+
+  const response = await axios.post(
+
+    GROQ_URL,
+
+    {
+
+      model: AI_MODEL,
+
+      messages: [
+
+        {
+          role: "system",
+          content: systemPrompt
+        },
+
+        {
+          role: "user",
+          content: message
+        }
+
+      ],
+
+      temperature: 0.7,
+
+      max_tokens: 1000
+
+    },
+
+    {
+
+      headers: {
+
+        Authorization:
+          `Bearer ${process.env.GROQ_API_KEY}`,
+
+        "Content-Type":
+          "application/json"
+
+      }
+
+    }
+
+  );
+
+
+  return response.data
+    .choices[0]
+    .message.content;
+
+}
+
+
+/* =========================
+   NGO AI ASSISTANT
+========================= */
+
+
+app.post(
+  "/api/ai/chat",
+  async(req,res)=>{
+
+
+    try{
+
+
+      const reply =
+      await askAI(
+
+`
+You are NayePankh AI Assistant.
+
+About NGO:
+- NayePankh works in education, environment, healthcare, social awareness and skill development.
+
+Your job:
+- Guide volunteers.
+- Explain campaigns.
+- Answer NGO related questions.
+- Be friendly, professional and motivating.
+- Keep answers practical.
+`,
+
+      req.body.message
+
+      );
+
+
+      res.json({
+
+        success:true,
+
+        reply
+
+      });
+
+
+    }catch(error){
+
+
+      res.status(500).json({
+
+        success:false,
+
+        message:"AI service failed"
+
+      });
+
+    }
+
+
+  }
+);
+
+
+
+/* =========================
+   AI CAMPAIGN RECOMMENDATION
+========================= */
+
+
+app.post(
+  "/api/ai/recommend",
+  protect,
+  async(req,res)=>{
+
+
+    try{
+
+
+      const profile = `
+Skills:
+${req.user.skills.join(", ")}
+
+Interests:
+${req.user.interests.join(", ")}
+
+City:
+${req.user.city}
+`;
+
+
+      const reply =
+      await askAI(
+
+`
+You are a volunteer career advisor.
+
+Analyze the user profile and recommend:
+- Suitable NGO activities
+- Campaign categories
+- Skills they should improve
+
+Give clear bullet points.
+`,
+
+profile
+
+      );
+
+
+      res.json({
+
+        success:true,
+
+        recommendation:reply
+
+      });
+
+
+    }catch(error){
+
+
+      res.status(500).json({
+
+        success:false,
+
+        message:error.message
+
+      });
+
+    }
+
+
+  }
+);
+
+
+
+/* =========================
+   ADMIN AI CAMPAIGN WRITER
+========================= */
+
+
+app.post(
+  "/api/admin/ai/campaign",
+  protect,
+  adminOnly,
+  async(req,res)=>{
+
+
+    try{
+
+
+      const reply =
+      await askAI(
+
+`
+You are an NGO content writer.
+
+Generate a professional campaign including:
+
+- Title
+- Short Description
+- Objectives
+- Volunteer Roles
+- Impact
+
+Make it attractive.
+`,
+
+req.body.topic
+
+      );
+
+
+      res.json({
+
+        success:true,
+
+        content:reply
+
+      });
+
+
+    }catch(error){
+
+
+      res.status(500).json({
+
+        success:false,
+
+        message:error.message
+
+      });
+
+    }
+
+
+  }
+);
+
+
+
+/* =========================
+   AI SOCIAL MEDIA POST
+========================= */
+
+
+app.post(
+  "/api/admin/ai/post",
+  protect,
+  adminOnly,
+  async(req,res)=>{
+
+
+    try{
+
+
+      const reply =
+      await askAI(
+
+`
+You are a social media manager for NayePankh Foundation.
+
+Create an engaging social media post.
+
+Include:
+- Attractive opening
+- Main message
+- Call to action
+- Relevant hashtags
+
+Keep it inspiring.
+`,
+
+req.body.topic
+
+      );
+
+
+      res.json({
+
+        success:true,
+
+        post:reply
+
+      });
+
+
+    }catch(error){
+
+
+      res.status(500).json({
+
+        success:false,
+
+        message:error.message
+
+      });
+
+    }
+
+
+  }
+);
+
+
+/* =========================
+   CERTIFICATE ID GENERATOR
+========================= */
+
+function generateCertificateId() {
+
+  const year =
+  new Date().getFullYear();
+
+
+  const random =
+  crypto.randomBytes(3)
+  .toString("hex")
+  .toUpperCase();
+
+
+  return `NP-${year}-${random}`;
+}
+
+/* =========================
+   GENERATE CERTIFICATE PDF
+========================= */
+
+async function createCertificatePDF(
+  volunteer,
+  campaign,
+  certificateId,
+  qrBuffer
+) {
+
+
+return new Promise((resolve)=>{
+
+
+const doc =
+new PDFDocument({
+
+  size:"A4",
+
+  margin:50
+
+});
+
+
+const chunks = [];
+
+
+doc.on(
+"data",
+chunk => chunks.push(chunk)
+);
+
+
+doc.on(
+"end",
+()=>{
+
+resolve(
+Buffer.concat(chunks)
+);
+
+});
+
+
+/* Design */
+
+doc
+.fontSize(28)
+.fillColor("#0f766e")
+.text(
+"NayePankh Foundation",
+{
+align:"center"
+}
+);
+
+
+doc.moveDown();
+
+
+doc
+.fontSize(22)
+.fillColor("black")
+.text(
+"Certificate of Appreciation",
+{
+align:"center"
+}
+);
+
+
+doc.moveDown(2);
+
+
+doc
+.fontSize(16)
+.text(
+"This certificate is proudly presented to",
+{
+align:"center"
+}
+);
+
+
+doc.moveDown();
+
+
+doc
+.fontSize(30)
+.fillColor("#22c55e")
+.text(
+volunteer.name,
+{
+align:"center"
+}
+);
+
+
+doc.moveDown();
+
+
+doc
+.fontSize(15)
+.fillColor("black")
+.text(
+`For successfully participating in "${campaign.title}"`,
+{
+align:"center"
+}
+);
+
+
+doc.moveDown(2);
+
+
+doc.text(
+`Category: ${campaign.category}`,
+{
+align:"center"
+}
+);
+
+
+doc.text(
+`Location: ${campaign.location}`,
+{
+align:"center"
+}
+);
+
+
+doc.moveDown();
+
+
+doc.text(
+`Certificate ID: ${certificateId}`,
+{
+align:"center"
+}
+);
+
+
+doc.moveDown(2);
+
+
+/* QR */
+
+if(qrBuffer){
+
+doc.image(
+qrBuffer,
+230,
+520,
+{
+width:100
+}
+);
+
+}
+
+
+doc.fontSize(10)
+.text(
+"Scan QR to verify certificate",
+{
+align:"center"
+}
+);
+
+
+doc.moveDown(3);
+
+
+doc.text(
+`Issued Date: ${
+new Date()
+.toLocaleDateString()
+}`,
+{
+align:"left"
+}
+);
+
+
+doc.text(
+"Authorized By: NayePankh Foundation",
+{
+align:"right"
+}
+);
+
+
+/* Finish */
+
+doc.end();
+
+
+});
+
+
+}
+
+/* =========================
+   UPLOAD PDF TO CLOUDINARY
+========================= */
+
+function uploadPDF(buffer) {
+
+  return new Promise((resolve, reject)=>{
+
+
+    const stream =
+    cloudinary.uploader.upload_stream(
+
+      {
+
+        folder:
+        "nayepankh-certificates",
+
+        resource_type:
+        "raw"
+
+      },
+
+
+      (error, result)=>{
+
+
+        if(error) {
+
+          reject(error);
+
+        }
+
+        else {
+
+          resolve(result);
+
+        }
+
+      }
+
+    );
+
+
+    streamifier
+    .createReadStream(buffer)
+    .pipe(stream);
+
+
+  });
+
+}
+
+
+/* =========================
+   GENERATE CERTIFICATE
+========================= */
+
+app.post(
+  "/api/admin/certificate/:applicationId",
+  protect,
+  adminOnly,
+  async (req, res) => {
+
+    try {
+
+      const application =
+      await Application.findById(
+        req.params.applicationId
+      )
+      .populate("volunteerId")
+      .populate("campaignId");
+
+
+      if (!application) {
+
+        return res.status(404).json({
+          success:false,
+          message:"Application not found"
+        });
+
+      }
+
+
+      if (application.status !== "approved") {
+
+        return res.status(400).json({
+          success:false,
+          message:"Volunteer is not approved"
+        });
+
+      }
+
+
+      // Prevent duplicate certificates
+
+      const exists =
+      await Certificate.findOne({
+
+        volunteerId:
+        application.volunteerId._id,
+
+        campaignId:
+        application.campaignId._id
+
+      });
+
+
+      if (exists) {
+
+        return res.status(400).json({
+
+          success:false,
+
+          message:"Certificate already generated"
+
+        });
+
+      }
+
+
+      const certificateId =
+      generateCertificateId();
+
+
+      // QR contains verification URL
+
+      const qrData =
+      `${req.protocol}://${req.get("host")}/api/certificate/verify/${certificateId}`;
+
+
+      const qrBuffer =
+      await QRCode.toBuffer(qrData);
+
+
+      // Generate PDF
+
+      const pdfBuffer =
+      await createCertificatePDF(
+
+        application.volunteerId,
+
+        application.campaignId,
+
+        certificateId,
+
+        qrBuffer
+
+      );
+
+
+      // Upload to Cloudinary
+
+      const uploadResult =
+      await uploadPDF(pdfBuffer);
+
+
+      // Save certificate
+
+      const certificate =
+      await Certificate.create({
+
+        certificateId,
+
+        volunteerId:
+        application.volunteerId._id,
+
+        campaignId:
+        application.campaignId._id,
+
+        pdfUrl:
+        uploadResult.secure_url,
+
+        qrCode:
+        qrData,
+
+        issuedBy:
+        req.user._id
+
+      });
+
+
+      res.status(201).json({
+
+        success:true,
+
+        message:
+        "Certificate generated successfully",
+
+        certificate
+
+      });
+
+
+    } catch(error) {
+
+
+      res.status(500).json({
+
+        success:false,
+
+        message:error.message
+
+      });
+
+    }
+
+  }
+);
+/* =========================
+   MY CERTIFICATES
+========================= */
+
+app.get(
+  "/api/my-certificates",
+  protect,
+  async (req,res)=>{
+
+    try{
+
+      const certificates =
+      await Certificate.find({
+        volunteerId:req.user._id
+      })
+      .populate(
+        "campaignId",
+        "title category eventDate"
+      )
+      .sort({
+        createdAt:-1
+      });
+
+
+      res.json({
+
+        success:true,
+
+        count:certificates.length,
+
+        certificates
+
+      });
+
+
+    }catch(error){
+
+      res.status(500).json({
+
+        success:false,
+        message:error.message
+
+      });
+
+    }
+
+  }
+);
+
+/* =========================
+   VERIFY CERTIFICATE
+========================= */
+
+app.get(
+  "/api/certificate/verify/:certificateId",
+  async(req,res)=>{
+
+    try{
+
+      const certificate =
+      await Certificate.findOne({
+
+        certificateId:
+        req.params.certificateId
+
+      })
+      .populate(
+        "volunteerId",
+        "name email"
+      )
+      .populate(
+        "campaignId",
+        "title category"
+      );
+
+
+      if(
+        !certificate ||
+        certificate.status==="revoked"
+      ){
+
+        return res.status(404).json({
+
+          success:false,
+
+          valid:false,
+
+          message:
+          "Invalid certificate"
+
+        });
+
+      }
+
+
+      res.json({
+
+        success:true,
+
+        valid:true,
+
+        certificate
+
+      });
+
+
+    }catch(error){
+
+      res.status(500).json({
+
+        success:false,
+
+        message:error.message
+
+      });
+
+    }
+
+  }
+);
+/* =========================
+   ALL CERTIFICATES
+========================= */
+
+
+app.get(
+  "/api/admin/certificates",
+  protect,
+  adminOnly,
+  async(req,res)=>{
+
+
+    try{
+
+
+      const certificates =
+      await Certificate.find()
+
+      .populate(
+        "volunteerId",
+        "name email"
+      )
+
+      .populate(
+        "campaignId",
+        "title category"
+      )
+
+      .sort({
+        createdAt:-1
+      });
+
+
+      res.json({
+
+        success:true,
+
+        count:certificates.length,
+
+        certificates
+
+      });
+
+
+    }catch(error){
+
+
+      res.status(500).json({
+
+        success:false,
+
+        message:error.message
+
+      });
+
+    }
+
+  }
+);
+/* =========================
+   DELETE CERTIFICATE
+========================= */
+
+
+app.delete(
+  "/api/admin/certificate/:id",
+  protect,
+  adminOnly,
+  async(req,res)=>{
+
+
+    try{
+
+
+      await Certificate.findByIdAndDelete(
+        req.params.id
+      );
+
+
+      res.json({
+
+        success:true,
+
+        message:
+        "Certificate deleted"
+
+      });
+
+
+    }catch(error){
+
+      res.status(500).json({
+
+        success:false,
+
+        message:error.message
+
+      });
+
+    }
+
+
+  }
+);
+
+/* =========================
+   ADMIN DASHBOARD
+========================= */
+
+
+app.get(
+  "/api/admin/dashboard",
+  protect,
+  adminOnly,
+  async(req,res)=>{
+
+
+    try{
+
+
+      const totalVolunteers =
+      await User.countDocuments({
+        role:"volunteer"
+      });
+
+
+      const totalCampaigns =
+      await Campaign.countDocuments();
+
+
+      const totalApplications =
+      await Application.countDocuments();
+
+
+      const totalCertificates =
+      await Certificate.countDocuments();
+
+
+      res.json({
+
+        success:true,
+
+        stats:{
+
+          totalVolunteers,
+
+          totalCampaigns,
+
+          totalApplications,
+
+          totalCertificates
+
+        }
+
+      });
+
+
+    }catch(error){
+
+
+      res.status(500).json({
+
+        success:false,
+
+        message:error.message
+
+      });
+
+    }
+
+
+  }
+);
 // =========================
 // HOME / HEALTH CHECK
 // =========================
