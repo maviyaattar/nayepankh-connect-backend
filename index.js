@@ -1467,105 +1467,6 @@ app.get(
 
 
 /* =========================
-   CANCEL APPLICATION
-========================= */
-
-
-app.delete(
-  "/api/applications/:id",
-  protect,
-  async(req,res)=>{
-
-
-    try{
-
-
-      const application =
-      await Application.findById(
-        req.params.id
-      );
-
-
-      if(!application){
-
-        return res.status(404).json({
-          success:false,
-          message:"Application not found"
-        });
-
-      }
-
-
-      if(
-        application.volunteerId.toString()
-        !==
-        req.user._id.toString()
-      ){
-
-        return res.status(403).json({
-          success:false,
-          message:"Unauthorized"
-        });
-
-      }
-
-
-     // Approving for first time
-if(
-  application.status !== "approved" &&
-  status === "approved"
-){
-
-  campaign.currentVolunteers++;
-
-  await campaign.save();
-
-}
-
-
-// Changing approved to rejected
-if(
-  application.status === "approved" &&
-  status === "rejected"
-){
-
-  campaign.currentVolunteers--;
-
-  await campaign.save();
-
-}
-
-      await application.deleteOne();
-
-
-      res.json({
-
-        success:true,
-
-        message:"Application cancelled"
-
-      });
-
-
-    }catch(error){
-
-      res.status(500).json({
-
-        success:false,
-
-        message:error.message
-
-      });
-
-    }
-
-
-  }
-);
-
-
-
-/* =========================
    ADMIN GET ALL APPLICATIONS
 ========================= */
 
@@ -1627,12 +1528,90 @@ app.get(
   }
 );
 
+/* =========================
+   CANCEL APPLICATION
+========================= */
 
+app.delete(
+  "/api/applications/:id",
+  protect,
+  async(req,res)=>{
+
+    try{
+
+      const application =
+      await Application.findById(
+        req.params.id
+      );
+
+
+      if(!application){
+
+        return res.status(404).json({
+          success:false,
+          message:"Application not found"
+        });
+
+      }
+
+
+      if(
+        application.volunteerId.toString()
+        !==
+        req.user._id.toString()
+      ){
+
+        return res.status(403).json({
+          success:false,
+          message:"Unauthorized"
+        });
+
+      }
+
+
+      // Approved applications cannot be cancelled
+      if(
+        application.status === "approved"
+      ){
+
+        return res.status(400).json({
+          success:false,
+          message:"Approved application cannot be cancelled"
+        });
+
+      }
+
+
+      await application.deleteOne();
+
+
+      res.json({
+
+        success:true,
+
+        message:"Application cancelled successfully"
+
+      });
+
+
+    }catch(error){
+
+      res.status(500).json({
+
+        success:false,
+
+        message:error.message
+
+      });
+
+    }
+
+  }
+);
 
 /* =========================
    APPROVE / REJECT APPLICATION
 ========================= */
-
 
 app.put(
   "/api/admin/applications/:id",
@@ -1640,24 +1619,18 @@ app.put(
   adminOnly,
   async(req,res)=>{
 
-
     try{
-
 
       const { status } = req.body;
 
 
       if(
-        !["approved","rejected"]
-        .includes(status)
+        !["approved","rejected"].includes(status)
       ){
 
         return res.status(400).json({
-
           success:false,
-
           message:"Invalid status"
-
         });
 
       }
@@ -1672,11 +1645,8 @@ app.put(
       if(!application){
 
         return res.status(404).json({
-
           success:false,
-
           message:"Application not found"
-
         });
 
       }
@@ -1688,34 +1658,65 @@ app.put(
       );
 
 
+      // Pending -> Approved
       if(
-        status === "approved"
-        &&
-        campaign.currentVolunteers >=
-        campaign.requiredVolunteers
-      ){
-
-        return res.status(400).json({
-
-          success:false,
-
-          message:"Campaign is full"
-
-        });
-
-      }
-
-
-      // Increase count only first time approval
-      if(
-        application.status !== "approved"
-        &&
+        application.status !== "approved" &&
         status === "approved"
       ){
+
+        if(
+          campaign.currentVolunteers >=
+          campaign.requiredVolunteers
+        ){
+
+          return res.status(400).json({
+            success:false,
+            message:"Campaign is full"
+          });
+
+        }
+
 
         campaign.currentVolunteers++;
 
         await campaign.save();
+
+
+        await sendNotification(
+          application.volunteerId,
+          "🎉 Application Approved",
+          `Your application for "${campaign.title}" has been approved.`
+        );
+
+
+        await giveBadge(
+          application.volunteerId,
+          "Active Volunteer"
+        );
+
+      }
+
+
+      // Approved -> Rejected
+      if(
+        application.status === "approved" &&
+        status === "rejected"
+      ){
+
+        if(campaign.currentVolunteers > 0){
+
+          campaign.currentVolunteers--;
+
+          await campaign.save();
+
+        }
+
+
+        await sendNotification(
+          application.volunteerId,
+          "Application Rejected",
+          `Your application for "${campaign.title}" has been rejected.`
+        );
 
       }
 
@@ -1725,12 +1726,18 @@ app.put(
       await application.save();
 
 
+      await addActivity(
+        req.user._id,
+        "Application Status Updated",
+        `${campaign.title} changed to ${status}`
+      );
+
+
       res.json({
 
         success:true,
 
-        message:
-        `Application ${status}`,
+        message:`Application ${status}`,
 
         application
 
@@ -1749,10 +1756,8 @@ app.put(
 
     }
 
-
   }
 );
-
 
 /* =========================
    UPDATE VOLUNTEER PROFILE
@@ -3403,6 +3408,8 @@ app.get(
   }
 );
 
+
+
 /* =========================
    GET MY NOTIFICATIONS
 ========================= */
@@ -3412,21 +3419,42 @@ app.get(
   protect,
   async(req,res)=>{
 
-    const notifications =
-    await Notification.find({
-      userId:req.user._id
-    })
-    .sort({createdAt:-1});
+    try{
+
+      const notifications =
+      await Notification.find({
+        userId:req.user._id
+      })
+      .sort({
+        createdAt:-1
+      });
 
 
-    res.json({
-      success:true,
-      notifications
-    });
+      res.json({
+
+        success:true,
+
+        count:notifications.length,
+
+        notifications
+
+      });
+
+
+    }catch(error){
+
+      res.status(500).json({
+
+        success:false,
+
+        message:error.message
+
+      });
+
+    }
 
   }
 );
-
 
 
 /* =========================
@@ -3438,22 +3466,66 @@ app.put(
   protect,
   async(req,res)=>{
 
-    await Notification.findByIdAndUpdate(
-      req.params.id,
-      {
-        isRead:true
+    try{
+
+      const notification =
+      await Notification.findOneAndUpdate(
+
+        {
+          _id:req.params.id,
+          userId:req.user._id
+        },
+
+        {
+          isRead:true
+        },
+
+        {
+          new:true
+        }
+
+      );
+
+
+      if(!notification){
+
+        return res.status(404).json({
+
+          success:false,
+
+          message:"Notification not found"
+
+        });
+
       }
-    );
 
 
-    res.json({
-      success:true,
-      message:"Notification marked as read"
-    });
+      res.json({
+
+        success:true,
+
+        message:"Notification marked as read",
+
+        notification
+
+      });
+
+
+    }catch(error){
+
+      res.status(500).json({
+
+        success:false,
+
+        message:error.message
+
+      });
+
+    }
 
   }
 );
-
+    
 
 /* =========================
    SYSTEM HELPERS
