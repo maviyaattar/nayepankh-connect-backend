@@ -211,9 +211,14 @@ const userSchema = new mongoose.Schema({
   },
 
   bio: {
-    type: String,
-    default: ""
-  }
+  type: String,
+  default: ""
+},
+
+badges: {
+  type: [String],
+  default: []
+}
 
 }, {
   timestamps: true
@@ -468,6 +473,77 @@ const Contact = mongoose.model(
   contactSchema
 );
 
+
+/* =========================
+   NOTIFICATION SCHEMA
+========================= */
+
+const notificationSchema = new mongoose.Schema({
+
+  userId:{
+    type: mongoose.Schema.Types.ObjectId,
+    ref: "User",
+    required: true
+  },
+
+  title:{
+    type:String,
+    required:true
+  },
+
+  message:{
+    type:String,
+    required:true
+  },
+
+  isRead:{
+    type:Boolean,
+    default:false
+  }
+
+},{
+  timestamps:true
+});
+
+
+const Notification = mongoose.model(
+  "Notification",
+  notificationSchema
+);
+
+
+
+/* =========================
+   ACTIVITY LOG SCHEMA
+========================= */
+
+const activitySchema = new mongoose.Schema({
+
+  adminId:{
+    type: mongoose.Schema.Types.ObjectId,
+    ref:"User",
+    required:true
+  },
+
+  action:{
+    type:String,
+    required:true
+  },
+
+  details:{
+    type:String,
+    default:""
+  }
+
+},{
+  timestamps:true
+});
+
+
+const Activity = mongoose.model(
+  "Activity",
+  activitySchema
+);
 
 /* =========================
    AUTH MIDDLEWARE
@@ -1434,17 +1510,30 @@ app.delete(
       }
 
 
-      if(
-        application.status === "approved"
-      ){
+     // Approving for first time
+if(
+  application.status !== "approved" &&
+  status === "approved"
+){
 
-        return res.status(400).json({
-          success:false,
-          message:"Approved application cannot be cancelled"
-        });
+  campaign.currentVolunteers++;
 
-      }
+  await campaign.save();
 
+}
+
+
+// Changing approved to rejected
+if(
+  application.status === "approved" &&
+  status === "rejected"
+){
+
+  campaign.currentVolunteers--;
+
+  await campaign.save();
+
+}
 
       await application.deleteOne();
 
@@ -3193,27 +3282,41 @@ app.get(
 ========================= */
 
 
-app.delete(
-  "/api/admin/certificate/:id",
+app.put(
+  "/api/admin/certificate/revoke/:id",
   protect,
   adminOnly,
   async(req,res)=>{
 
-
     try{
 
-
-      await Certificate.findByIdAndDelete(
+      const certificate =
+      await Certificate.findById(
         req.params.id
       );
+
+
+      if(!certificate){
+
+        return res.status(404).json({
+          success:false,
+          message:"Certificate not found"
+        });
+
+      }
+
+
+      certificate.status = "revoked";
+
+
+      await certificate.save();
 
 
       res.json({
 
         success:true,
 
-        message:
-        "Certificate deleted"
+        message:"Certificate revoked successfully"
 
       });
 
@@ -3223,17 +3326,14 @@ app.delete(
       res.status(500).json({
 
         success:false,
-
         message:error.message
 
       });
 
     }
 
-
   }
 );
-
 /* =========================
    ADMIN DASHBOARD
 ========================= */
@@ -3302,6 +3402,159 @@ app.get(
 
   }
 );
+
+/* =========================
+   GET MY NOTIFICATIONS
+========================= */
+
+app.get(
+  "/api/notifications",
+  protect,
+  async(req,res)=>{
+
+    const notifications =
+    await Notification.find({
+      userId:req.user._id
+    })
+    .sort({createdAt:-1});
+
+
+    res.json({
+      success:true,
+      notifications
+    });
+
+  }
+);
+
+
+
+/* =========================
+   MARK NOTIFICATION READ
+========================= */
+
+app.put(
+  "/api/notifications/:id",
+  protect,
+  async(req,res)=>{
+
+    await Notification.findByIdAndUpdate(
+      req.params.id,
+      {
+        isRead:true
+      }
+    );
+
+
+    res.json({
+      success:true,
+      message:"Notification marked as read"
+    });
+
+  }
+);
+
+
+/* =========================
+   SYSTEM HELPERS
+========================= */
+
+
+async function sendNotification(
+  userId,
+  title,
+  message
+){
+
+  await Notification.create({
+
+    userId,
+    title,
+    message
+
+  });
+
+}
+
+
+
+async function addActivity(
+  adminId,
+  action,
+  details=""
+){
+
+  await Activity.create({
+
+    adminId,
+    action,
+    details
+
+  });
+
+}
+
+
+
+async function giveBadge(
+  userId,
+  badge
+){
+
+  const user =
+  await User.findById(userId);
+
+
+  if(
+    user &&
+    !user.badges.includes(badge)
+  ){
+
+    user.badges.push(badge);
+
+    await user.save();
+
+
+    await sendNotification(
+      userId,
+      "🏆 New Badge Earned",
+      `Congratulations! You earned ${badge}`
+    );
+
+  }
+
+}
+
+/* =========================
+   ADMIN GET ACTIVITY LOGS
+========================= */
+
+app.get(
+  "/api/admin/activity",
+  protect,
+  adminOnly,
+  async(req,res)=>{
+
+    const activities =
+    await Activity.find()
+    .populate(
+      "adminId",
+      "name email"
+    )
+    .sort({
+      createdAt:-1
+    });
+
+
+    res.json({
+      success:true,
+      activities
+    });
+
+  }
+);
+
+
 // =========================
 // HOME / HEALTH CHECK
 // =========================
