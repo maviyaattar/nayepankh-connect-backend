@@ -819,7 +819,372 @@ app.post(
 
 
 
+/* =========================
+   UPLOAD CAMPAIGN IMAGE
+========================= */
 
+app.post(
+  "/api/upload",
+  protect,
+  adminOnly,
+  upload.single("image"),
+  async (req, res) => {
+
+    try {
+
+      if (!req.file) {
+        return res.status(400).json({
+          success: false,
+          message: "No image selected"
+        });
+      }
+
+
+      const base64 =
+        `data:${req.file.mimetype};base64,${req.file.buffer.toString("base64")}`;
+
+
+      const result =
+        await cloudinary.uploader.upload(
+          base64,
+          {
+            folder: "nayepankh-campaigns"
+          }
+        );
+
+
+      res.json({
+        success: true,
+        imageUrl: result.secure_url
+      });
+
+
+    } catch (error) {
+
+      res.status(500).json({
+        success: false,
+        message: error.message
+      });
+
+    }
+
+  }
+);
+
+
+/* =========================
+   CREATE CAMPAIGN
+========================= */
+
+app.post(
+  "/api/campaigns",
+  protect,
+  adminOnly,
+  async (req, res) => {
+
+    try {
+
+
+      const campaign =
+        await Campaign.create({
+
+          title: req.body.title,
+
+          description: req.body.description,
+
+          category: req.body.category,
+
+          image: req.body.image,
+
+          location: req.body.location,
+
+          eventDate: req.body.eventDate,
+
+          lastApplyDate: req.body.lastApplyDate,
+
+          requiredVolunteers:
+            req.body.requiredVolunteers,
+
+          createdBy: req.user._id
+
+        });
+
+
+      res.status(201).json({
+
+        success: true,
+
+        campaign
+
+      });
+
+
+    } catch (error) {
+
+
+      res.status(500).json({
+
+        success: false,
+
+        message: error.message
+
+      });
+
+    }
+
+  }
+);
+
+
+
+/* =========================
+   GET ALL CAMPAIGNS
+========================= */
+
+app.get(
+  "/api/campaigns",
+  async (req, res) => {
+
+
+    try {
+
+
+      const campaigns =
+        await Campaign.find({
+
+          status: {
+            $ne: "cancelled"
+          }
+
+        })
+        .populate(
+          "createdBy",
+          "name email"
+        )
+        .sort({
+          createdAt: -1
+        });
+
+
+      res.json({
+
+        success: true,
+
+        count: campaigns.length,
+
+        campaigns
+
+      });
+
+
+    } catch (error) {
+
+
+      res.status(500).json({
+
+        success: false,
+
+        message: error.message
+
+      });
+
+    }
+
+  }
+);
+
+
+
+/* =========================
+   GET SINGLE CAMPAIGN
+========================= */
+
+app.get(
+  "/api/campaigns/:id",
+  async (req, res) => {
+
+
+    try {
+
+
+      const campaign =
+        await Campaign.findById(
+          req.params.id
+        )
+        .populate(
+          "createdBy",
+          "name email"
+        );
+
+
+      if (!campaign) {
+
+        return res.status(404).json({
+
+          success: false,
+
+          message: "Campaign not found"
+
+        });
+
+      }
+
+
+      res.json({
+
+        success: true,
+
+        campaign
+
+      });
+
+
+    } catch (error) {
+
+
+      res.status(500).json({
+
+        success: false,
+
+        message: error.message
+
+      });
+
+    }
+
+  }
+);
+
+
+
+/* =========================
+   UPDATE CAMPAIGN
+========================= */
+
+app.put(
+  "/api/campaigns/:id",
+  protect,
+  adminOnly,
+  async (req, res) => {
+
+
+    try {
+
+
+      const campaign =
+        await Campaign.findByIdAndUpdate(
+
+          req.params.id,
+
+          req.body,
+
+          {
+            new: true
+          }
+
+        );
+
+
+      if (!campaign) {
+
+
+        return res.status(404).json({
+
+          success: false,
+
+          message: "Campaign not found"
+
+        });
+
+      }
+
+
+      res.json({
+
+        success: true,
+
+        campaign
+
+      });
+
+
+    } catch (error) {
+
+
+      res.status(500).json({
+
+        success: false,
+
+        message: error.message
+
+      });
+
+    }
+
+  }
+);
+
+
+
+/* =========================
+   DELETE CAMPAIGN
+========================= */
+
+app.delete(
+  "/api/campaigns/:id",
+  protect,
+  adminOnly,
+  async (req, res) => {
+
+
+    try {
+
+
+      const campaign =
+        await Campaign.findByIdAndDelete(
+          req.params.id
+        );
+
+
+      if (!campaign) {
+
+
+        return res.status(404).json({
+
+          success: false,
+
+          message: "Campaign not found"
+
+        });
+
+      }
+
+
+      res.json({
+
+        success: true,
+
+        message:
+          "Campaign deleted successfully"
+
+      });
+
+
+    } catch (error) {
+
+
+      res.status(500).json({
+
+        success: false,
+
+        message: error.message
+
+      });
+
+    }
+
+  }
+);
 
 
 // =========================
